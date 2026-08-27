@@ -1,0 +1,1182 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no" />
+<title>캘린더 투두 Pro</title>
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="캘린더투두" />
+<meta name="theme-color" content="#ffffff" />
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23007aff'/%3E%3Ctext x='50' y='62' font-size='46' text-anchor='middle' fill='white' font-family='sans-serif'%3E%F0%9F%93%85%3C/text%3E%3C/svg%3E" />
+<style>
+  :root {
+    --page-bg: #f5f5f9;
+    --surface: #ffffff;
+    --text: #1c1c1e;
+    --sub: #8e8e93;
+    --tertiary: #c7c7cc;
+    --hairline: #f2f2f7;
+    --border: #e5e5ea;
+    --input-border: #d1d1d6;
+    --bar-bg: #1c1c1e;
+    --primary: #4A90E2;
+    --primary-light: #EBF3FC;
+    --shadow: 0 8px 24px rgba(0,0,0,0.05);
+    
+    --grass-0: #ebedf0;
+    --grass-1: #9be9a8;
+    --grass-2: #40c463;
+    --grass-3: #30a14e;
+    --grass-4: #216e39;
+  }
+  [data-theme="dark"] {
+    --page-bg: #000000;
+    --surface: #1c1c1e;
+    --text: #f2f2f7;
+    --sub: #98989d;
+    --tertiary: #636366;
+    --hairline: #2c2c2e;
+    --border: #38383a;
+    --input-border: #48484a;
+    --bar-bg: #3a3a3c;
+    --primary: #5E5CE6;
+    --primary-light: #2c2c3e;
+    --shadow: 0 8px 24px rgba(0,0,0,0.3);
+
+    --grass-0: #161b22;
+    --grass-1: #0e4429;
+    --grass-2: #006d32;
+    --grass-3: #26a641;
+    --grass-4: #39d353;
+  }
+  html, body { margin: 0; padding: 0; background: var(--page-bg); overscroll-behavior: none; touch-action: manipulation; color: var(--text); }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; font-family: -apple-system, BlinkMacSystemFont, "Pretendard", "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  #root { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 0; }
+  
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-thumb { background: var(--tertiary); border-radius: 4px; }
+  
+  /* 사용자 친화적인 애니메이션 */
+  @keyframes shimmer { 0% { background-position: -200% center; } 100% { background-position: 200% center; } }
+  @keyframes popIn { 0% { opacity: 0; transform: translateY(15px) scale(0.98); } 100% { opacity: 1; transform: translateY(0) scale(1); } }
+  
+  .ai-text-shimmer {
+    background: linear-gradient(90deg, #9b51e0, var(--primary), #9b51e0);
+    background-size: 200% auto;
+    color: transparent;
+    -webkit-background-clip: text;
+    background-clip: text;
+    animation: shimmer 2.5s linear infinite;
+    font-weight: 700;
+  }
+  
+  .card {
+    background: var(--surface);
+    border-radius: 20px;
+    box-shadow: var(--shadow);
+    animation: popIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+  
+  .btn-friendly {
+    transition: transform 0.1s, opacity 0.2s;
+  }
+  .btn-friendly:active { transform: scale(0.96); opacity: 0.8; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel" data-type="module">
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+const pad = (n) => String(n).padStart(2, '0');
+const toKey = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
+
+// LocalStorage Keys
+const STORAGE_KEY = 'calendar_todo_app_data_v2';
+const BLOCKS_KEY = 'calendar_todo_app_blocks_v2';
+const EXAMS_KEY = 'calendar_todo_app_exams_v2';
+const POMO_HISTORY_KEY = 'pomodoro_history_v1';
+const EXP_KEY = 'calendar_todo_app_exp_v1';
+const HABITS_KEY = 'calendar_todo_app_habits_v1';
+
+// Web Push Notification Helper
+const sendPush = (title, body) => {
+  if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+    new Notification(title, { body, icon: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext x='50' y='62' font-size='46' text-anchor='middle'%3E%F0%9F%93%85%3C/text%3E%3C/svg%3E" });
+  }
+};
+
+/* --------------------------------------------------------
+   구글 캘린더 연동 헬퍼 함수
+-------------------------------------------------------- */
+const generateGCalUrl = (title, dateStr, startMin, endMin) => {
+  const d = new Date(dateStr);
+  const yyyy = d.getFullYear();
+  const mm = pad(d.getMonth() + 1);
+  const dd = pad(d.getDate());
+  const sh = pad(Math.floor(startMin / 60));
+  const sm = pad(startMin % 60);
+  const eh = pad(Math.floor(endMin / 60));
+  const em = pad(endMin % 60);
+  
+  const start = `${yyyy}${mm}${dd}T${sh}${sm}00`;
+  const end = `${yyyy}${mm}${dd}T${eh}${em}00`;
+  return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(title)}&dates=${start}/${end}`;
+};
+
+/* --------------------------------------------------------
+   AI API Integration (Gemini)
+-------------------------------------------------------- */
+const API_KEY = ""; // Canvas 환경에서 자동 주입됨
+
+async function callGeminiAPI(payload) {
+  const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${API_KEY}`;
+  try {
+    const res = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const json = await res.json();
+    return json.candidates?.[0]?.content?.parts?.[0]?.text;
+  } catch (e) {
+    console.error("AI 연결 에러:", e);
+    return null;
+  }
+}
+
+async function getDailyFeedbackAI(dataStr) {
+  const payload = {
+    contents: [{ parts: [{ text: `오늘의 학습 기록:\n${dataStr}\n다정하고 동기를 부여해주는 짧은 코칭 피드백(3문장 이내)을 작성해줘. 이모지를 섞어줘.` }] }],
+    systemInstruction: { parts: [{ text: "당신은 따뜻하고 응원을 아끼지 않는 1:1 학습 코치입니다." }] }
+  };
+  const text = await callGeminiAPI(payload);
+  return text || "오늘 하루도 수고 많으셨어요! 내일도 화이팅입니다 💪";
+}
+
+async function breakdownTaskWithAI(taskName) {
+  const payload = {
+    contents: [{ parts: [{ text: `"${taskName}" 작업을 수행하기 위한 구체적이고 실행 가능한 하위 할일 3~5개를 작성해줘.` }] }],
+    generationConfig: { responseMimeType: "application/json", responseSchema: { type: "ARRAY", items: { type: "STRING" } } }
+  };
+  const text = await callGeminiAPI(payload);
+  return text ? JSON.parse(text) : [];
+}
+
+async function getWeeklyRetrospectiveAI(weekDataStr) {
+  const payload = {
+    contents: [{ parts: [{ text: `이번 주 학습 데이터야:\n${weekDataStr}\n이 데이터를 바탕으로 1. 이번 주 잘한 점 2. 아쉬운 점/보완점 3. 다음 주 전략을 3문단으로 짧고 명확하게 요약해줘.` }] }],
+    systemInstruction: { parts: [{ text: "당신은 분석적이고 통찰력 있는 학습 컨설턴트입니다." }] }
+  };
+  const text = await callGeminiAPI(payload);
+  return text || "데이터가 충분하지 않거나 AI 연결에 실패했습니다.";
+}
+
+async function autoScheduleAI(todos, dayBlocks, startMin) {
+  const prompt = `현재 분(min): ${startMin}\n비어있는 일정에 할 일들을 배치해야 해.\n미완료 할일: ${todos.join(', ')}\n기존 일정(분 단위): ${dayBlocks.map(b => `${b.start}~${b.end}`).join(', ')}\n현재 분(${startMin}) 이후의 빈 시간을 찾아 각 할 일을 30분 단위 블록으로 스케줄링해줘. 겹치면 안 돼. JSON 배열로 반환해.`;
+  const payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: "ARRAY",
+        items: {
+          type: "OBJECT",
+          properties: { title: { type: "STRING" }, start: { type: "INTEGER" }, end: { type: "INTEGER" } }
+        }
+      }
+    }
+  };
+  const text = await callGeminiAPI(payload);
+  return text ? JSON.parse(text) : [];
+}
+
+/* --------------------------------------------------------
+   Custom Hooks (EXP, Habits, Todos, Blocks, etc)
+-------------------------------------------------------- */
+function useExp() {
+  const [exp, setExp] = useState(0);
+  useEffect(() => { try { const raw = localStorage.getItem(EXP_KEY); if(raw) setExp(parseInt(raw, 10)); } catch(e) {} }, []);
+  
+  const addExp = useCallback((amount) => {
+    setExp(prev => {
+      const next = prev + amount;
+      try { localStorage.setItem(EXP_KEY, next.toString()); } catch(e) {}
+      return next;
+    });
+  }, []);
+  
+  const level = Math.floor(exp / 100) + 1;
+  const progress = exp % 100;
+  return { exp, level, progress, addExp };
+}
+
+function useHabits(addExp) {
+  const [habits, setHabits] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    try { const raw = localStorage.getItem(HABITS_KEY); if (raw) setHabits(JSON.parse(raw)); } catch(e) {} finally { setLoaded(true); }
+  }, []);
+
+  useEffect(() => {
+    if (!loaded) return;
+    const todayKey = toKey(new Date());
+    let changed = false;
+    const next = habits.map(h => {
+      if (h.lastDoneDate !== todayKey && h.done) { changed = true; return { ...h, done: false }; }
+      return h;
+    });
+    if (changed) { setHabits(next); try{ localStorage.setItem(HABITS_KEY, JSON.stringify(next)); } catch(e){} }
+  }, [loaded, habits]);
+
+  const persist = (next) => { setHabits(next); try { localStorage.setItem(HABITS_KEY, JSON.stringify(next)); } catch(e){} };
+  
+  const add = (title) => persist([...habits, { id: Date.now().toString(), title, done: false, lastDoneDate: '' }]);
+  const remove = (id) => persist(habits.filter(h => h.id !== id));
+  const toggle = (id) => {
+    persist(habits.map(h => {
+      if (h.id === id) {
+        const isDone = !h.done;
+        if (isDone && addExp) addExp(2);
+        return { ...h, done: isDone, lastDoneDate: isDone ? toKey(new Date()) : h.lastDoneDate };
+      }
+      return h;
+    }));
+  };
+  return { habits, add, remove, toggle };
+}
+
+function useTodos(addExp) {
+  const [todos, setTodos] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    try { const raw = localStorage.getItem(STORAGE_KEY); if (raw) setTodos(JSON.parse(raw)); } catch (e) {} finally { setLoaded(true); }
+  }, []);
+
+  const persist = useCallback((next) => { setTodos(next); try { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch (e) {} }, []);
+
+  const add = (title, dateKey) => persist([...todos, { id: Date.now().toString() + Math.random().toString(36).slice(2), title, date: dateKey, done: false }]);
+  const toggle = (id) => persist(todos.map((t) => {
+    if (t.id === id) {
+      const nextDone = !t.done;
+      if (nextDone && addExp) addExp(5);
+      return { ...t, done: nextDone };
+    }
+    return t;
+  }));
+  const remove = (id) => persist(todos.filter((t) => t.id !== id));
+  
+  const addSpacedRepetition = (todo) => {
+    const newTodos = [...todos];
+    const intervals = [1, 3, 7];
+    intervals.forEach(days => {
+      const d = new Date(todo.date);
+      d.setDate(d.getDate() + days);
+      newTodos.push({ id: Date.now().toString() + Math.random().toString(36).slice(2), title: `[복습] ${todo.title}`, date: toKey(d), done: false });
+    });
+    persist(newTodos);
+  };
+
+  useEffect(() => {
+    if (!loaded) return;
+    const todayKey = toKey(new Date());
+    setTodos((prev) => {
+      const updated = prev.map((t) => (!t.done && t.date < todayKey ? { ...t, date: todayKey } : t));
+      if (updated.some((t, i) => t.date !== prev[i].date)) {
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(updated)); } catch (e) {}
+        return updated;
+      }
+      return prev;
+    });
+  }, [loaded]);
+
+  return { todos, add, toggle, remove, addSpacedRepetition };
+}
+
+function useBlocks() {
+  const [blocks, setBlocks] = useState([]);
+  useEffect(() => { try { const raw = localStorage.getItem(BLOCKS_KEY); if (raw) setBlocks(JSON.parse(raw)); } catch (e) {} }, []);
+  const persist = useCallback((next) => { setBlocks(next); try { localStorage.setItem(BLOCKS_KEY, JSON.stringify(next)); } catch (e) {} }, []);
+  const add = (block) => persist([...blocks, block]);
+  const update = (id, patch) => persist(blocks.map((b) => (b.id === id ? { ...b, ...patch } : b)));
+  const remove = (id) => persist(blocks.filter((b) => b.id !== id));
+  const addMany = (items) => persist([...blocks, ...items]);
+  return { blocks, add, addMany, update, remove };
+}
+
+function usePomodoroHistory(addExp) {
+  const [sessions, setSessions] = useState([]);
+  useEffect(() => { try { const raw = localStorage.getItem(POMO_HISTORY_KEY); if (raw) setSessions(JSON.parse(raw)); } catch (e) {} }, []);
+  const addSession = (dateKey, minutes, tag = '', description = '') => {
+    setSessions((prev) => {
+      const next = [...prev, { id: Date.now().toString(), date: dateKey, minutes, tag, description }];
+      try { localStorage.setItem(POMO_HISTORY_KEY, JSON.stringify(next)); } catch (e) {}
+      return next;
+    });
+    if (addExp) addExp(10);
+  };
+  return { sessions, addSession };
+}
+
+function useExamDates() {
+  const [exams, setExams] = useState([]);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(EXAMS_KEY);
+      if (raw) setExams(JSON.parse(raw));
+      else {
+        const old = localStorage.getItem('exam_date_v1');
+        if (old) setExams([{ id: 'default', title: '목표 시험', date: old }]);
+      }
+    } catch (e) {}
+  }, []);
+  const persist = useCallback((next) => { setExams(next); try { localStorage.setItem(EXAMS_KEY, JSON.stringify(next)); } catch (e) {} }, []);
+  return { exams, setExams: persist };
+}
+
+/* --------------------------------------------------------
+   Global UI Components
+-------------------------------------------------------- */
+function ExamDdayBar({ exams, setExams }) {
+  const [editing, setEditing] = useState(false);
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [drafts, setDrafts] = useState([]);
+  useEffect(() => { setDrafts(exams); }, [exams, editing]);
+
+  const activeExam = exams[currentIndex];
+  let label = '시험일/디데이를 추가해보세요 ✨';
+  let color = 'var(--primary)';
+  
+  if (activeExam && activeExam.date) {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const target = new Date(activeExam.date + 'T00:00:00');
+    const diff = Math.round((target - today) / 86400000);
+    if (diff > 0) {
+      label = `${activeExam.title} D-${diff}`;
+      if (diff <= 7) color = '#FF3B30';
+      else if (diff <= 30) color = '#FF9500';
+      else color = 'var(--primary)';
+    } else if (diff === 0) {
+      label = `🎉 오늘이 ${activeExam.title} 일이에요!`; color = '#34C759';
+    } else {
+      label = `${activeExam.title} D+${Math.abs(diff)}`; color = 'var(--sub)';
+    }
+  }
+
+  if (editing) {
+    return (
+      <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div className="card" style={{ width: '90%', maxWidth: 360, padding: 24 }}>
+          <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 16 }}>디데이 관리</div>
+          {drafts.map((ex, i) => (
+            <div key={ex.id} style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+              <input value={ex.title} onChange={(e) => { const n = [...drafts]; n[i].title = e.target.value; setDrafts(n); }} placeholder="시험명" style={{ flex: 1, padding: '10px', borderRadius: 12, border: '1px solid var(--input-border)', fontSize: 14 }} />
+              <input type="date" value={ex.date} onChange={(e) => { const n = [...drafts]; n[i].date = e.target.value; setDrafts(n); }} style={{ width: 130, padding: '10px', borderRadius: 12, border: '1px solid var(--input-border)', fontSize: 14 }} />
+              <button className="btn-friendly" onClick={() => setDrafts(drafts.filter((_, idx) => idx !== i))} style={{ border: 'none', background: '#FF3B30', color: '#fff', borderRadius: 12, padding: '0 14px' }}>×</button>
+            </div>
+          ))}
+          <button className="btn-friendly" onClick={() => setDrafts([...drafts, { id: Date.now().toString(), title: '', date: toKey(new Date()) }])} style={{ width: '100%', padding: '12px', borderRadius: 12, border: '1px dashed var(--sub)', background: 'transparent', color: 'var(--text)', marginBottom: 20, fontWeight: 600 }}>+ 새 디데이 추가</button>
+          <div style={{ display: 'flex', gap: 12 }}>
+            <button className="btn-friendly" onClick={() => setEditing(false)} style={{ flex: 1, padding: '14px', borderRadius: 14, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontWeight: 600 }}>취소</button>
+            <button className="btn-friendly" onClick={() => { setExams(drafts.filter(d => d.title && d.date)); setEditing(false); setCurrentIndex(0); }} style={{ flex: 1, padding: '14px', borderRadius: 14, border: 'none', background: 'var(--primary)', color: '#fff', fontWeight: 600 }}>저장</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ background: color, color: '#fff', padding: '10px 16px', paddingTop: 'max(10px, env(safe-area-inset-top))', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.4s' }}>
+      {exams.length > 1 && <button onClick={(e) => { e.stopPropagation(); setCurrentIndex((prev) => (prev - 1 + exams.length) % exams.length); }} style={{ background: 'none', border: 'none', color: '#fff', padding: '0 16px', cursor: 'pointer', fontSize: 18 }}>‹</button>}
+      <div onClick={() => setEditing(true)} style={{ cursor: 'pointer', fontWeight: 700, flex: 1, textAlign: 'center' }}>🎯 {label}</div>
+      {exams.length > 1 && <button onClick={(e) => { e.stopPropagation(); setCurrentIndex((prev) => (prev + 1) % exams.length); }} style={{ background: 'none', border: 'none', color: '#fff', padding: '0 16px', cursor: 'pointer', fontSize: 18 }}>›</button>}
+    </div>
+  );
+}
+
+function LevelHeader({ level, progress }) {
+  return (
+    <div style={{ padding: '20px 24px 0 24px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--primary)' }}>Lv.{level} 프로 학습가</div>
+        <div style={{ fontSize: 12, color: 'var(--sub)', fontWeight: 600 }}>{progress} / 100 EXP</div>
+      </div>
+      <div style={{ width: '100%', height: 8, background: 'var(--hairline)', borderRadius: 4, overflow: 'hidden' }}>
+        <div style={{ width: `${progress}%`, height: '100%', background: 'linear-gradient(90deg, var(--primary), #34c759)', transition: 'width 0.6s cubic-bezier(0.16, 1, 0.3, 1)' }} />
+      </div>
+    </div>
+  );
+}
+
+/* --------------------------------------------------------
+   Screens (Home, Calendar, Timebox, Pomodoro, Stats, Settings)
+-------------------------------------------------------- */
+function HomeScreen({ todos, blocks, sessions, habits, toggleHabit, toggleTodo, onNavigate, onStartPomodoro, addSpacedRepetition, addHabit }) {
+  const now = new Date();
+  const todayKey = toKey(now);
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+
+  const todayTodos = todos.filter((t) => t.date === todayKey);
+  const doneCount = todayTodos.filter((t) => t.done).length;
+  const incompleteTodos = todayTodos.filter((t) => !t.done);
+  
+  const todayBlocks = blocks.filter((b) => b.date === todayKey).sort((a, b) => a.start - b.start);
+  const upcoming = todayBlocks.filter((b) => b.end > nowMin);
+  const nextBlock = upcoming[0];
+  const todayPomodoroCount = sessions.filter((s) => s.date === todayKey).length;
+  
+  const [toast, setToast] = useState('');
+  useEffect(() => { if (toast) { const t = setTimeout(() => setToast(''), 2500); return () => clearTimeout(t); } }, [toast]);
+
+  const [aiMessage, setAiMessage] = useState('');
+  const [isAiLoading, setIsAiLoading] = useState(false);
+  const [habitDraft, setHabitDraft] = useState('');
+  const [showHabitInput, setShowHabitInput] = useState(false);
+
+  const fetchAiFeedback = async () => {
+    setIsAiLoading(true);
+    const dataString = `- 완료한 할일: ${doneCount}개\n- 미완료 할일: ${incompleteTodos.length}개\n- 포모도로 달성: ${todayPomodoroCount}세트\n- 완료한 습관: ${habits.filter(h=>h.done).length}개`;
+    const msg = await getDailyFeedbackAI(dataString);
+    setAiMessage(msg);
+    setIsAiLoading(false);
+  };
+
+  return (
+    <div style={{ padding: '16px 24px 24px', height: '100%', overflowY: 'auto' }}>
+      <div style={{ fontSize: 14, color: 'var(--sub)', marginBottom: 4, fontWeight: 500 }}>{now.getMonth() + 1}월 {now.getDate()}일 {WEEKDAYS[now.getDay()]}요일</div>
+      <div style={{ fontSize: 26, fontWeight: 800, marginBottom: 24, letterSpacing: '-0.5px' }}>안녕하세요 👋</div>
+
+      {/* AI 코치 컴포넌트 */}
+      <div className="card" style={{ background: 'var(--primary-light)', padding: 18, marginBottom: 24, border: 'none', boxShadow: 'none' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+          <div style={{ fontSize: 15, fontWeight: 700 }} className="ai-text-shimmer">✨ AI 학습 코치</div>
+          <button className="btn-friendly" onClick={fetchAiFeedback} disabled={isAiLoading} style={{ border: 'none', background: 'var(--surface)', padding: '8px 14px', borderRadius: 20, fontSize: 12, fontWeight: 700, color: 'var(--primary)', cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}>
+            {isAiLoading ? '분석 중...' : '오늘의 피드백 받기'}
+          </button>
+        </div>
+        <div style={{ fontSize: 14, color: 'var(--text)', lineHeight: 1.6, background: 'var(--surface)', padding: '14px', borderRadius: 14 }}>
+          {isAiLoading ? <span style={{ color: 'var(--sub)' }}>기록을 분석하고 있어요... 🤖</span> : aiMessage ? aiMessage : <span style={{ color: 'var(--sub)' }}>버튼을 눌러 오늘의 학습 상태를 진단받으세요!</span>}
+        </div>
+      </div>
+
+      {/* 데일리 루틴(습관) */}
+      <div style={{ marginBottom: 28 }}>
+        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6 }}>💧 데일리 루틴</div>
+        <div className="card" style={{ padding: '4px 16px' }}>
+          {habits.length === 0 && <div style={{ padding: '12px 0', fontSize: 13, color: 'var(--sub)' }}>매일 할 습관을 추가해보세요.</div>}
+          {habits.map((h, i) => (
+            <div key={h.id} style={{ display: 'flex', alignItems: 'center', padding: '12px 0', borderBottom: i !== habits.length - 1 ? '1px solid var(--hairline)' : 'none' }}>
+              <button className="btn-friendly" onClick={() => toggleHabit(h.id)} style={{ width: 26, height: 26, borderRadius: 10, border: 'none', background: h.done ? '#34c759' : 'var(--hairline)', color: '#fff', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center', marginRight: 12, cursor: 'pointer' }}>
+                {h.done && '✓'}
+              </button>
+              <span style={{ flex: 1, fontSize: 15, color: h.done ? 'var(--tertiary)' : 'var(--text)', textDecoration: h.done ? 'line-through' : 'none', fontWeight: h.done ? 400 : 500 }}>{h.title}</span>
+            </div>
+          ))}
+        </div>
+        {showHabitInput ? (
+          <div style={{ display: 'flex', gap: 8, marginTop: 12, animation: 'popIn 0.2s' }}>
+            <input autoFocus value={habitDraft} onChange={e=>setHabitDraft(e.target.value)} placeholder="매일 할 습관 입력 (예: 영단어 50개)" style={{ flex: 1, padding: '10px 14px', borderRadius: 12, border: '1px solid var(--input-border)', fontSize: 14 }} />
+            <button className="btn-friendly" onClick={() => { if(habitDraft.trim()) addHabit(habitDraft.trim()); setHabitDraft(''); setShowHabitInput(false); }} style={{ padding: '10px 16px', background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: 12, fontWeight: 600 }}>추가</button>
+          </div>
+        ) : (
+          <button onClick={() => setShowHabitInput(true)} style={{ marginTop: 12, fontSize: 14, color: 'var(--primary)', background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontWeight: 600 }}>+ 루틴 추가</button>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', gap: 12, marginBottom: 24 }}>
+        <div className="card" style={{ flex: 1, padding: 16 }}>
+          <div style={{ fontSize: 22, fontWeight: 800 }}>{doneCount}/{todayTodos.length}</div>
+          <div style={{ fontSize: 13, color: 'var(--sub)', marginTop: 2, fontWeight: 500 }}>할 일 완료</div>
+        </div>
+        <div className="card" style={{ flex: 1, padding: 16 }}>
+          <div style={{ fontSize: 22, fontWeight: 800 }}>{todayPomodoroCount}개</div>
+          <div style={{ fontSize: 13, color: 'var(--sub)', marginTop: 2, fontWeight: 500 }}>포모도로</div>
+        </div>
+      </div>
+
+      {nextBlock ? (
+        <div className="card btn-friendly" onClick={() => onNavigate('timebox')} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: 16, background: nextBlock.color, marginBottom: 28, cursor: 'pointer' }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ color: 'rgba(255,255,255,0.85)', fontSize: 12, marginBottom: 4, fontWeight: 600 }}>다음 일정 {nextBlock.tag ? `[${nextBlock.tag}]` : ''}</div>
+            <div style={{ color: '#fff', fontWeight: 800, fontSize: 16, marginBottom: 2 }}>{nextBlock.title}</div>
+            <div style={{ color: 'rgba(255,255,255,0.85)', fontSize: 13, fontWeight: 500 }}>{pad(Math.floor(nextBlock.start/60))}:{pad(nextBlock.start%60)}–{pad(Math.floor(nextBlock.end/60))}:{pad(nextBlock.end%60)}</div>
+          </div>
+          <button className="btn-friendly" onClick={(e) => { e.stopPropagation(); onStartPomodoro({ title: nextBlock.title, tag: nextBlock.tag, minutes: Math.max(5, nextBlock.end - nextBlock.start), token: Date.now() }); }} style={{ border: 'none', background: 'rgba(255,255,255,0.25)', color: '#fff', borderRadius: 12, padding: '10px 16px', fontSize: 13, fontWeight: 700 }}>바로 시작 ▶</button>
+        </div>
+      ) : (
+        <div className="card" style={{ padding: 16, background: 'var(--hairline)', color: 'var(--sub)', fontSize: 14, marginBottom: 28, textAlign: 'center', fontWeight: 500, boxShadow: 'none' }}>오늘 남은 일정이 없어요 ☕</div>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        <div style={{ fontSize: 16, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>📝 단기 할 일</div>
+        <div onClick={() => onNavigate('calendar')} style={{ fontSize: 14, color: 'var(--primary)', cursor: 'pointer', fontWeight: 600 }}>전체 보기</div>
+      </div>
+
+      <div className="card" style={{ padding: '4px 16px' }}>
+        {incompleteTodos.length === 0 ? (
+          <div style={{ fontSize: 14, color: 'var(--tertiary)', padding: '24px 0', textAlign: 'center' }}>
+            {todayTodos.length > 0 ? '오늘 할 일을 다 끝냈어요! 대단해요 🎉' : '등록된 할 일이 없어요. 텅~ 🍃'}
+          </div>
+        ) : (
+          incompleteTodos.map((t, i) => (
+            <div key={t.id} style={{ display: 'flex', alignItems: 'center', padding: '12px 0', borderBottom: i !== incompleteTodos.length - 1 ? '1px solid var(--hairline)' : 'none' }}>
+              <button className="btn-friendly" onClick={() => toggleTodo(t.id)} style={{ width: 24, height: 24, borderRadius: 12, border: '2px solid var(--tertiary)', background: 'transparent', marginRight: 12, flexShrink: 0 }} />
+              <span style={{ flex: 1, fontSize: 15, fontWeight: 500 }}>{t.title}</span>
+              <button className="btn-friendly" onClick={() => { addSpacedRepetition(t); setToast('1, 3, 7일 뒤 복습 일정이 캘린더에 생성되었습니다.'); }} style={{ border: 'none', background: 'var(--hairline)', color: 'var(--text)', padding: '6px 10px', borderRadius: 8, fontSize: 12, cursor: 'pointer', fontWeight: 600 }}>🔁 복습</button>
+            </div>
+          ))
+        )}
+      </div>
+      
+      {toast && <div style={{ position: 'fixed', bottom: 90, left: '50%', transform: 'translateX(-50%)', background: 'var(--bar-bg)', color: '#fff', padding: '12px 20px', borderRadius: 24, fontSize: 14, fontWeight: 600, zIndex: 50, whiteSpace: 'nowrap', animation: 'popIn 0.3s' }}>{toast}</div>}
+    </div>
+  );
+}
+
+function CalendarScreen({ todos, add, toggle, remove, addSpacedRepetition }) {
+  const [cursor, setCursor] = useState(new Date());
+  const [selected, setSelected] = useState(new Date());
+  const [showAdd, setShowAdd] = useState(false);
+  const [draft, setDraft] = useState('');
+  
+  const [isAiBreakingDown, setIsAiBreakingDown] = useState(false);
+  const [toast, setToast] = useState('');
+  useEffect(() => { if (toast) { const t = setTimeout(() => setToast(''), 3000); return () => clearTimeout(t); } }, [toast]);
+
+  const year = cursor.getFullYear();
+  const month = cursor.getMonth();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const startOffset = new Date(year, month, 1).getDay();
+  const cells = Array.from({ length: startOffset }, () => null).concat(Array.from({ length: daysInMonth }, (_, i) => new Date(year, month, i + 1)));
+  
+  const selectedKey = toKey(selected);
+  const todayKey = toKey(new Date());
+  const dayTodos = todos.filter(t => t.date === selectedKey).sort((a, b) => a.id - b.id);
+
+  const submitAdd = () => { if (draft.trim()) { add(draft.trim(), selectedKey); setDraft(''); setShowAdd(false); } };
+
+  const handleAIBreakdown = async () => {
+    if (!draft.trim()) { setToast('할 일을 먼저 입력해주세요 (예: 중간고사 대비)'); return; }
+    setIsAiBreakingDown(true);
+    const subtasks = await breakdownTaskWithAI(draft.trim());
+    if (subtasks && subtasks.length > 0) {
+      subtasks.forEach(t => add(t, selectedKey));
+      setDraft(''); setShowAdd(false);
+      setToast(`✨ AI가 ${subtasks.length}개의 하위 할 일로 쪼개주었어요!`);
+    } else {
+      setToast('AI 할 일 쪼개기에 실패했습니다.');
+    }
+    setIsAiBreakingDown(false);
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px' }}>
+        <button className="btn-friendly" onClick={() => setCursor(new Date(year, month - 1, 1))} style={{ width: 36, height: 36, borderRadius: 18, border: 'none', background: 'var(--surface)', boxShadow: 'var(--shadow)', fontSize: 18 }}>‹</button>
+        <div style={{ fontSize: 18, fontWeight: 700 }}>{year}년 {month + 1}월</div>
+        <button className="btn-friendly" onClick={() => setCursor(new Date(year, month + 1, 1))} style={{ width: 36, height: 36, borderRadius: 18, border: 'none', background: 'var(--surface)', boxShadow: 'var(--shadow)', fontSize: 18 }}>›</button>
+      </div>
+
+      <div className="card" style={{ margin: '0 16px', padding: '16px 8px', borderRadius: 20 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', marginBottom: 8 }}>
+          {WEEKDAYS.map((w, i) => <div key={w} style={{ textAlign: 'center', fontSize: 12, fontWeight: 600, color: i === 0 ? '#ff3b30' : i === 6 ? 'var(--primary)' : 'var(--sub)' }}>{w}</div>)}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 4 }}>
+          {cells.map((d, i) => {
+            if (!d) return <div key={i} />;
+            const key = toKey(d);
+            const isSel = key === selectedKey;
+            const isTod = key === todayKey;
+            const count = todos.filter(t => t.date === key && !t.done).length;
+            return (
+              <button key={i} onClick={() => setSelected(d)} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', aspectRatio: '1', border: 'none', borderRadius: 12, background: isSel ? 'var(--primary)' : 'transparent', color: isSel ? '#fff' : isTod ? 'var(--primary)' : 'var(--text)', fontWeight: isTod || isSel ? 700 : 500, transition: 'background 0.2s' }}>
+                <span style={{ fontSize: 15 }}>{d.getDate()}</span>
+                {count > 0 && <span style={{ width: 5, height: 5, borderRadius: 2.5, marginTop: 3, background: isSel ? '#fff' : '#ff9500' }} />}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div style={{ padding: '24px 20px', flex: 1, overflowY: 'auto' }}>
+        <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 12 }}>{selected.getMonth() + 1}월 {selected.getDate()}일 할 일</div>
+        <div className="card" style={{ padding: '4px 16px', minHeight: 100 }}>
+          {dayTodos.length === 0 && <div style={{ fontSize: 14, color: 'var(--tertiary)', padding: '32px 0', textAlign: 'center', fontWeight: 500 }}>등록된 일정이 없어요 🍃</div>}
+          {dayTodos.map((t, i) => (
+            <div key={t.id} style={{ display: 'flex', alignItems: 'center', padding: '14px 0', borderBottom: i !== dayTodos.length -1 ? '1px solid var(--hairline)' : 'none' }}>
+              <button className="btn-friendly" onClick={() => toggle(t.id)} style={{ width: 24, height: 24, borderRadius: 12, border: `2px solid ${t.done ? '#34c759' : 'var(--tertiary)'}`, background: t.done ? '#34c759' : 'transparent', marginRight: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {t.done && <span style={{ color: '#fff', fontSize: 13 }}>✓</span>}
+              </button>
+              <span style={{ flex: 1, fontSize: 15, color: t.done ? 'var(--tertiary)' : 'var(--text)', textDecoration: t.done ? 'line-through' : 'none', fontWeight: t.done ? 400 : 500 }}>{t.title}</span>
+              {!t.done && <button className="btn-friendly" onClick={() => {addSpacedRepetition(t); setToast('1, 3, 7일 뒤 복습 일정이 생성되었습니다.');}} style={{ border: 'none', background: 'var(--hairline)', color: 'var(--text)', padding: '6px 10px', borderRadius: 8, fontSize: 12, marginRight: 8, fontWeight: 600 }}>🔁</button>}
+              <button className="btn-friendly" onClick={() => remove(t.id)} style={{ border: 'none', background: 'none', color: 'var(--tertiary)', fontSize: 20 }}>×</button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ padding: '0 20px 20px' }}>
+        {showAdd ? (
+          <div className="card" style={{ padding: 16, animation: 'popIn 0.2s' }}>
+            <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
+              <input autoFocus value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submitAdd()} placeholder="막연한 큰 과제 입력" style={{ flex: 1, padding: '12px 14px', borderRadius: 12, border: '1px solid var(--input-border)', fontSize: 15 }} />
+              <button className="btn-friendly" onClick={submitAdd} style={{ background: 'var(--primary)', color: '#fff', padding: '0 20px', borderRadius: 12, border: 'none', fontWeight: 700, fontSize: 15 }}>추가</button>
+            </div>
+            <button className="btn-friendly" onClick={handleAIBreakdown} disabled={isAiBreakingDown} style={{ width: '100%', padding: '12px', borderRadius: 12, border: 'none', background: 'var(--primary-light)', color: 'var(--primary)', fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, cursor: 'pointer' }}>
+              {isAiBreakingDown ? '🤔 생각 중...' : '✨ 너무 막막하다면? AI로 할 일 작게 쪼개기'}
+            </button>
+          </div>
+        ) : (
+          <button className="btn-friendly" onClick={() => setShowAdd(true)} style={{ width: '100%', padding: '16px', borderRadius: 16, border: 'none', background: 'var(--primary)', color: '#fff', fontSize: 16, fontWeight: 700, boxShadow: '0 4px 12px rgba(74, 144, 226, 0.3)' }}>+ 할 일 추가</button>
+        )}
+      </div>
+
+      {toast && <div style={{ position: 'absolute', bottom: 90, left: '50%', transform: 'translateX(-50%)', background: 'var(--bar-bg)', color: '#fff', padding: '12px 20px', borderRadius: 24, fontSize: 14, fontWeight: 600, zIndex: 50, whiteSpace: 'nowrap', animation: 'popIn 0.3s' }}>{toast}</div>}
+    </div>
+  );
+}
+
+const BLOCK_COLORS = ['#4A90E2', '#34C759', '#FF9500', '#FF3B30', '#AF52DE', '#5856D6'];
+const PRESET_TAGS = ['토양학', '분자유전학', '작물생리학', '통계학', '기타'];
+const PPM = 1.3; 
+
+function TimeboxScreen({ todos, blocks, add, update, remove, addMany }) {
+  const [day, setDay] = useState(new Date());
+  const dayKey = toKey(day);
+  const dayBlocks = blocks.filter((b) => b.date === dayKey);
+  const [editing, setEditing] = useState(null);
+  
+  const [dragState, setDragState] = useState(null); 
+  const scrollRef = useRef(null);
+  const contentRef = useRef(null);
+  const [isAiLoading, setIsAiLoading] = useState(false);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      const now = new Date();
+      const targetMin = (toKey(now) === dayKey) ? now.getHours() * 60 : 8 * 60;
+      scrollRef.current.scrollTop = Math.max(0, targetMin * PPM - 120);
+    }
+  }, [dayKey]);
+
+  const handlePointerDown = (e, b, type) => {
+    e.stopPropagation();
+    e.target.setPointerCapture(e.pointerId);
+    setDragState({ id: b.id, type, startY: e.clientY, origStart: b.start, origEnd: b.end });
+  };
+
+  const handlePointerMove = (e) => {
+    if (!dragState) return;
+    const deltaY = e.clientY - dragState.startY;
+    const deltaMin = Math.round(deltaY / PPM / 5) * 5; 
+    
+    let newStart = dragState.origStart;
+    let newEnd = dragState.origEnd;
+
+    if (dragState.type === 'move') {
+      newStart = Math.max(0, dragState.origStart + deltaMin);
+      newEnd = Math.max(15, dragState.origEnd + deltaMin);
+      if (newEnd > 1440) { newEnd = 1440; newStart = 1440 - (dragState.origEnd - dragState.origStart); }
+    } else if (dragState.type === 'resize') {
+      newEnd = Math.min(1440, Math.max(newStart + 5, dragState.origEnd + deltaMin));
+    }
+    update(dragState.id, { start: newStart, end: newEnd });
+  };
+
+  const handlePointerUp = (e) => {
+    if (dragState) {
+      e.target.releasePointerCapture(e.pointerId);
+      setDragState(null);
+    }
+  };
+
+  const handleEmptyClick = (e) => {
+    if (dragState) return;
+    const rect = contentRef.current.getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    const min = Math.min(1440 - 5, Math.max(0, Math.round((y / PPM) / 5) * 5));
+    setEditing({ start: min, end: Math.min(1440, min + 30), title: '', tag: '', color: BLOCK_COLORS[0] });
+  };
+
+  const handleAiAutoSchedule = async () => {
+    setIsAiLoading(true);
+    const incomplete = todos.filter(t => t.date === dayKey && !t.done).map(t => t.title);
+    if(incomplete.length === 0) {
+      alert("스케줄링할 미완료 할 일이 없습니다."); setIsAiLoading(false); return;
+    }
+    const nowMin = (toKey(new Date()) === dayKey) ? new Date().getHours() * 60 + new Date().getMinutes() : 8 * 60;
+    
+    const newBlocks = await autoScheduleAI(incomplete, dayBlocks, nowMin);
+    if(newBlocks && newBlocks.length > 0) {
+      const items = newBlocks.map(b => ({
+        id: Date.now().toString() + Math.random().toString(36).slice(2),
+        date: dayKey, title: b.title, tag: b.tag || 'AI배정', start: b.start, end: b.end, color: '#AF52DE'
+      }));
+      addMany(items);
+    } else {
+      alert("적절한 빈 시간을 찾지 못했거나 오류가 발생했습니다.");
+    }
+    setIsAiLoading(false);
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px' }}>
+        <button className="btn-friendly" onClick={() => { const d = new Date(day); d.setDate(d.getDate() - 1); setDay(d); }} style={{ width: 36, height: 36, borderRadius: 18, border: 'none', background: 'var(--surface)', boxShadow: 'var(--shadow)', fontSize: 18 }}>‹</button>
+        <div style={{ fontSize: 16, fontWeight: 700 }}>{day.getMonth() + 1}월 {day.getDate()}일</div>
+        <button className="btn-friendly" onClick={() => { const d = new Date(day); d.setDate(d.getDate() + 1); setDay(d); }} style={{ width: 36, height: 36, borderRadius: 18, border: 'none', background: 'var(--surface)', boxShadow: 'var(--shadow)', fontSize: 18 }}>›</button>
+      </div>
+
+      <div style={{ padding: '0 20px 12px' }}>
+        <button className="btn-friendly" onClick={handleAiAutoSchedule} disabled={isAiLoading} style={{ width: '100%', padding: '14px', borderRadius: 14, border: 'none', background: 'var(--primary-light)', color: 'var(--primary)', fontSize: 14, fontWeight: 700, cursor: 'pointer', boxShadow: '0 4px 12px rgba(0,0,0,0.03)' }}>
+          {isAiLoading ? 'AI가 일정을 짜고 있어요...' : '✨ 할 일 목록 기반 AI 자동 스케줄링'}
+        </button>
+      </div>
+
+      <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', position: 'relative' }}>
+        <div ref={contentRef} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} onClick={handleEmptyClick} style={{ position: 'relative', height: 1440 * PPM, marginLeft: 56, touchAction: 'none' }}>
+          {Array.from({ length: 24 }).map((_, h) => (
+            <div key={h} style={{ position: 'absolute', top: h * 60 * PPM, left: 0, right: 0, borderTop: '1px solid var(--hairline)' }}>
+              <span style={{ position: 'absolute', left: -52, top: -8, fontSize: 12, color: 'var(--sub)', width: 44, textAlign: 'right', fontWeight: 500 }}>{pad(h)}:00</span>
+            </div>
+          ))}
+          {dayBlocks.map((b) => (
+            <div key={b.id} className="card" onPointerDown={(e) => handlePointerDown(e, b, 'move')} onClick={(e) => { e.stopPropagation(); if(!dragState) setEditing({ ...b }); }}
+              style={{
+                position: 'absolute', top: b.start * PPM, height: Math.max(20, (b.end - b.start) * PPM), left: 6, right: 10,
+                background: b.color, borderRadius: 8, padding: '4px 10px', overflow: 'hidden', cursor: 'grab',
+                opacity: dragState?.id === b.id ? 0.8 : 1, boxShadow: dragState?.id === b.id ? '0 8px 16px rgba(0,0,0,0.2)' : 'none', border: 'none',
+                animation: 'none' // remove popIn for draggable blocks
+              }}
+            >
+              <div style={{ color: '#fff', fontSize: 12, fontWeight: 600, pointerEvents: 'none' }}>{b.title} {b.tag && <span style={{opacity:0.8, fontSize: 10}}>({b.tag})</span>}</div>
+              <div style={{ color: 'rgba(255,255,255,0.85)', fontSize: 10, pointerEvents: 'none' }}>{pad(Math.floor(b.start/60))}:{pad(b.start%60)}–{pad(Math.floor(b.end/60))}:{pad(b.end%60)}</div>
+              
+              <div onPointerDown={(e) => handlePointerDown(e, b, 'resize')} style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 10, cursor: 'ns-resize', display: 'flex', justifyContent: 'center', alignItems: 'flex-end', paddingBottom: 2 }}>
+                <div style={{ width: 20, height: 3, background: 'rgba(255,255,255,0.5)', borderRadius: 2 }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {editing && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'flex-end', zIndex: 10 }} onClick={() => setEditing(null)}>
+          <div onClick={(e) => e.stopPropagation()} className="card" style={{ width: '100%', maxWidth: 430, margin: '0 auto', borderRadius: '24px 24px 0 0', padding: 24, paddingBottom: 'calc(24px + env(safe-area-inset-bottom))' }}>
+            <input autoFocus value={editing.title} onChange={(e) => setEditing({ ...editing, title: e.target.value })} placeholder="일정 이름" style={{ width: '100%', padding: '14px 16px', borderRadius: 14, border: '1px solid var(--input-border)', fontSize: 16, marginBottom: 16, fontWeight: 600 }} />
+            
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 13, color: 'var(--sub)', marginBottom: 8, fontWeight: 600 }}>태그 (과목)</div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {PRESET_TAGS.map(t => (
+                  <button className="btn-friendly" key={t} onClick={() => setEditing({...editing, tag: t})} style={{ padding: '8px 14px', borderRadius: 12, border: editing.tag === t ? 'none' : '1px solid var(--input-border)', background: editing.tag === t ? 'var(--primary)' : 'var(--surface)', color: editing.tag === t ? '#fff' : 'var(--text)', fontSize: 13, fontWeight: 600 }}>{t}</button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 10, marginBottom: 24 }}>
+              {BLOCK_COLORS.map((c) => <button className="btn-friendly" key={c} onClick={() => setEditing({ ...editing, color: c })} style={{ width: 32, height: 32, borderRadius: 16, background: c, border: editing.color === c ? '3px solid var(--text)' : '3px solid transparent' }} />)}
+            </div>
+            
+            <div style={{ display: 'flex', gap: 12 }}>
+              {editing.id && <button className="btn-friendly" onClick={() => { remove(editing.id); setEditing(null); }} style={{ padding: '16px 24px', borderRadius: 16, border: '1px solid #FF3B30', background: 'var(--surface)', color: '#FF3B30', fontSize: 16, fontWeight: 700 }}>삭제</button>}
+              <button className="btn-friendly" onClick={() => { 
+                const title = editing.title.trim();
+                if (!title) return;
+                if (editing.id) update(editing.id, { title, tag: editing.tag, color: editing.color });
+                else add({ id: Date.now().toString(), date: dayKey, title, tag: editing.tag, start: editing.start, end: editing.end, color: editing.color });
+                setEditing(null);
+              }} style={{ flex: 1, padding: '16px', borderRadius: 16, border: 'none', background: 'var(--primary)', color: '#fff', fontSize: 16, fontWeight: 700 }}>저장</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PomodoroScreen({ preset, onSessionComplete, todaySessions }) {
+  const [customWorkMin, setCustomWorkMin] = useState(25);
+  const [label, setLabel] = useState('');
+  const [tag, setTag] = useState('');
+  const [mode, setMode] = useState('work');
+  const [secondsLeft, setSecondsLeft] = useState(25 * 60);
+  const [running, setRunning] = useState(false);
+  const intervalRef = useRef(null);
+
+  // 집중 완료 기록용 상태
+  const [showCompletion, setShowCompletion] = useState(false);
+  const [completedDesc, setCompletedDesc] = useState('');
+
+  useEffect(() => {
+    if (preset) {
+      setCustomWorkMin(preset.minutes); setLabel(preset.title || ''); setTag(preset.tag || '');
+      setMode('work'); setSecondsLeft(preset.minutes * 60); setRunning(true);
+    }
+  }, [preset && preset.token]);
+
+  useEffect(() => {
+    if (running) {
+      intervalRef.current = setInterval(() => {
+        setSecondsLeft((s) => {
+          if (s <= 1) {
+            if (mode === 'work') {
+              // 집중 시간이 끝나면 타이머를 멈추고 기록 모달창을 띄웁니다.
+              setRunning(false);
+              setShowCompletion(true);
+              setCompletedDesc(label || ''); // 기존 목표가 있었다면 기본값으로 채워줌
+              sendPush('집중 종료!', '고생하셨습니다. 방금 완료한 작업을 기록해주세요 ☕');
+              return 0;
+            } else {
+              sendPush('휴식 종료!', '다시 집중할 시간입니다 💪');
+              setMode('work');
+              return customWorkMin * 60;
+            }
+          }
+          return s - 1;
+        });
+      }, 1000);
+    }
+    return () => clearInterval(intervalRef.current);
+  }, [running, mode, customWorkMin, label]);
+
+  const handleCompletionSubmit = () => {
+    if (onSessionComplete) onSessionComplete(customWorkMin, tag, completedDesc);
+    setShowCompletion(false);
+    setMode('break');
+    setSecondsLeft(5 * 60);
+    setRunning(true); // 휴식 타이머 자동 시작
+  };
+
+  const total = mode === 'work' ? customWorkMin * 60 : 5 * 60;
+  const progress = 1 - secondsLeft / total;
+  const size = 260, stroke = 12, r = (size - stroke) / 2, circumference = 2 * Math.PI * r;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', height: '100%', padding: '24px 24px 80px', overflowY: 'auto' }}>
+      <div style={{ fontSize: 18, color: mode === 'work' ? 'var(--primary)' : '#34c759', fontWeight: 800, marginBottom: 8, marginTop: 12 }}>{mode === 'work' ? '집중 시간' : '휴식 시간'}</div>
+      {label ? <div style={{ fontSize: 15, color: 'var(--text)', fontWeight: 600, marginBottom: 24 }}>{tag && <span style={{color:'var(--sub)', marginRight: 6}}>({tag})</span>}{label}</div> : <div style={{ marginBottom: 24 }} />}
+
+      <div style={{ position: 'relative', width: size, height: size, flexShrink: 0 }}>
+        <svg width={size} height={size} style={{ transform: 'rotate(-90deg)', filter: 'drop-shadow(0 10px 20px rgba(0,0,0,0.05))' }}>
+          <circle cx={size / 2} cy={size / 2} r={r} stroke="var(--hairline)" strokeWidth={stroke} fill="none" />
+          <circle cx={size / 2} cy={size / 2} r={r} stroke={mode === 'work' ? 'var(--primary)' : '#34c759'} strokeWidth={stroke} fill="none" strokeLinecap="round" strokeDasharray={circumference} strokeDashoffset={circumference * (1 - progress)} style={{ transition: 'stroke-dashoffset 1s linear' }} />
+        </svg>
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <span style={{ fontSize: 56, fontWeight: 700, fontVariantNumeric: 'tabular-nums', letterSpacing: '-1px' }}>{pad(Math.floor(secondsLeft / 60))}:{pad(secondsLeft % 60)}</span>
+        </div>
+      </div>
+
+      {/* 자유로운 시간 설정 컨트롤 (타이머가 멈춰있고, 작업 모드이며, 초기 상태일 때만 노출) */}
+      {!running && mode === 'work' && secondsLeft === customWorkMin * 60 && (
+         <div style={{ display: 'flex', gap: 12, marginTop: 24, alignItems: 'center', animation: 'popIn 0.3s' }}>
+           <button className="btn-friendly" onClick={() => { const v = Math.max(1, customWorkMin - 5); setCustomWorkMin(v); setSecondsLeft(v * 60); }} style={{ padding: '8px 16px', borderRadius: 12, border: 'none', background: 'var(--hairline)', color: 'var(--text)', fontWeight: 700 }}>- 5분</button>
+           <div style={{ position: 'relative' }}>
+             <input type="number" value={customWorkMin} onChange={(e) => { const v = Math.max(1, parseInt(e.target.value)||1); setCustomWorkMin(v); setSecondsLeft(v * 60); }} style={{ width: 70, textAlign: 'center', padding: '8px 24px 8px 8px', borderRadius: 12, border: '2px solid var(--primary-light)', fontSize: 18, fontWeight: 800, color: 'var(--primary)' }} />
+             <span style={{ position: 'absolute', right: 10, top: 12, fontSize: 14, fontWeight: 700, color: 'var(--primary)', pointerEvents: 'none' }}>분</span>
+           </div>
+           <button className="btn-friendly" onClick={() => { const v = customWorkMin + 5; setCustomWorkMin(v); setSecondsLeft(v * 60); }} style={{ padding: '8px 16px', borderRadius: 12, border: 'none', background: 'var(--hairline)', color: 'var(--text)', fontWeight: 700 }}>+ 5분</button>
+         </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 16, marginTop: (!running && mode === 'work' && secondsLeft === customWorkMin * 60) ? 24 : 48, transition: 'margin 0.3s' }}>
+        <button className="btn-friendly" onClick={() => setRunning(!running)} style={{ padding: '16px 40px', borderRadius: 28, border: 'none', background: 'var(--primary)', color: '#fff', fontSize: 18, fontWeight: 700, boxShadow: '0 8px 16px rgba(74,144,226,0.25)' }}>{running ? '일시정지' : '시작'}</button>
+        <button className="btn-friendly" onClick={() => { setRunning(false); setSecondsLeft(customWorkMin * 60); setMode('work'); }} style={{ padding: '16px 28px', borderRadius: 28, border: '1px solid var(--border)', background: 'var(--surface)', fontSize: 16, fontWeight: 600 }}>초기화</button>
+      </div>
+      
+      <button className="btn-friendly" onClick={() => window.location.href = 'shortcuts://run-shortcut?name=애플뮤직재생'} style={{ marginTop: 24, padding: '12px 24px', borderRadius: 20, border: 'none', background: '#ff2d55', color: '#fff', fontSize: 15, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', boxShadow: '0 6px 12px rgba(255,45,85,0.2)' }}>
+        🎵 애플뮤직 재생 (단축어)
+      </button>
+
+      {/* 완료 기록 리스트 UI */}
+      <div style={{ marginTop: 40, width: '100%', maxWidth: 380 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <div style={{ fontSize: 15, color: 'var(--text)', fontWeight: 700 }}>오늘의 집중 기록</div>
+          <div style={{ fontSize: 13, color: 'var(--sub)', fontWeight: 600 }}>총 {todaySessions.length}개 달성</div>
+        </div>
+        
+        {todaySessions.length === 0 && <div className="card" style={{ padding: 16, textAlign: 'center', color: 'var(--sub)', fontSize: 14, boxShadow: 'none', border: '1px dashed var(--border)' }}>아직 완료된 기록이 없어요 🌱</div>}
+        
+        {todaySessions.slice().reverse().map(s => (
+           <div key={s.id} className="card" style={{ padding: '14px 16px', borderRadius: 16, marginBottom: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid var(--hairline)', boxShadow: '0 2px 8px rgba(0,0,0,0.02)' }}>
+              <div style={{ fontWeight: 600, color: 'var(--text)', fontSize: 15 }}>
+                {s.description || '집중 완료'} {s.tag && <span style={{color: 'var(--primary)', marginLeft: 6, fontSize: 12, background: 'var(--primary-light)', padding: '2px 6px', borderRadius: 6}}>#{s.tag}</span>}
+              </div>
+              <div style={{color: 'var(--sub)', fontWeight: 800, fontSize: 14}}>{s.minutes}분</div>
+           </div>
+        ))}
+      </div>
+
+      {/* 완료 기록 모달창 */}
+      {showCompletion && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div className="card" style={{ width: '90%', maxWidth: 360, padding: 24, animation: 'popIn 0.3s cubic-bezier(0.16, 1, 0.3, 1)' }}>
+            <div style={{ fontSize: 20, fontWeight: 800, marginBottom: 8, color: 'var(--primary)' }}>🎉 집중 완료!</div>
+            <div style={{ fontSize: 14, color: 'var(--sub)', marginBottom: 20, fontWeight: 500 }}>{customWorkMin}분 동안 고생하셨습니다.<br/>방금 달성한 작업 내용을 기록해주세요.</div>
+            <input autoFocus value={completedDesc} onChange={(e) => setCompletedDesc(e.target.value)} placeholder="예: 토양학 1단원 복습" style={{ width: '100%', padding: '14px 16px', borderRadius: 14, border: '1px solid var(--input-border)', fontSize: 16, marginBottom: 20, fontWeight: 600 }} />
+            <button className="btn-friendly" onClick={handleCompletionSubmit} style={{ width: '100%', padding: '16px', borderRadius: 16, border: 'none', background: 'var(--primary)', color: '#fff', fontSize: 16, fontWeight: 700, boxShadow: '0 4px 12px rgba(74, 144, 226, 0.3)' }}>기록하고 휴식 시작 ☕</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatsScreen({ blocks, sessions, todos }) {
+  const [range, setRange] = useState('week');
+  const today = new Date();
+  
+  let days = [];
+  if (range === 'week') {
+    for (let i = 6; i >= 0; i--) { const d = new Date(today); d.setDate(d.getDate() - i); days.push(d); }
+  } else {
+    const year = today.getFullYear(), month = today.getMonth();
+    const numDays = new Date(year, month + 1, 0).getDate();
+    for (let d = 1; d <= numDays; d++) days.push(new Date(year, month, d));
+  }
+
+  let totalMin = 0;
+  const tagStats = {};
+  
+  const data = days.map((d) => {
+    const dKey = toKey(d);
+    const dayBlocks = blocks.filter(b => b.date === dKey);
+    const daySessions = sessions.filter(s => s.date === dKey);
+    let bMin = 0, pMin = 0;
+    dayBlocks.forEach(b => { const m = b.end - b.start; bMin += m; totalMin += m; tagStats[b.tag||'미분류'] = (tagStats[b.tag||'미분류']||0) + m; });
+    daySessions.forEach(s => { pMin += s.minutes; totalMin += s.minutes; tagStats[s.tag||'미분류'] = (tagStats[s.tag||'미분류']||0) + s.minutes; });
+    return { date: d, key: dKey, bMin, pMin, total: bMin + pMin };
+  });
+
+  const avg = Math.round(totalMin / data.length);
+  const fmtHM = (min) => (min >= 60 ? `${Math.floor(min / 60)}시간 ${min % 60}분` : `${min}분`);
+  const sortedTags = Object.entries(tagStats).sort((a, b) => b[1] - a[1]);
+
+  const grassDays = [];
+  for (let i = 34; i >= 0; i--) { const d = new Date(today); d.setDate(d.getDate() - i); grassDays.push(toKey(d)); }
+  const getActivityColor = (dateKey) => {
+    const count = sessions.filter(s=>s.date===dateKey).length + todos.filter(t=>t.date===dateKey && t.done).length;
+    if (count === 0) return 'var(--grass-0)';
+    if (count <= 3) return 'var(--grass-1)';
+    if (count <= 7) return 'var(--grass-2)';
+    if (count <= 12) return 'var(--grass-3)';
+    return 'var(--grass-4)';
+  };
+
+  const [aiReport, setAiReport] = useState('');
+  const [isAiLoading, setIsAiLoading] = useState(false);
+  const handleAiRetrospective = async () => {
+    setIsAiLoading(true);
+    const weekStr = `총 학습시간: ${fmtHM(totalMin)}\n주요 과목 비중: ${sortedTags.slice(0,3).map(t=>`${t[0]}(${fmtHM(t[1])})`).join(', ')}\n완료한 할 일: ${todos.filter(t=>t.done && days.some(d=>toKey(d)===t.date)).length}개`;
+    const report = await getWeeklyRetrospectiveAI(weekStr);
+    setAiReport(report);
+    setIsAiLoading(false);
+  };
+
+  return (
+    <div style={{ padding: '24px 20px', height: '100%', overflowY: 'auto' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <div style={{ fontSize: 22, fontWeight: 800 }}>학습 통계</div>
+        <div style={{ display: 'flex', background: 'var(--hairline)', borderRadius: 10, padding: 4 }}>
+          <button className="btn-friendly" onClick={() => setRange('week')} style={{ padding: '8px 14px', borderRadius: 8, border: 'none', background: range === 'week' ? 'var(--surface)' : 'transparent', fontSize: 13, fontWeight: 700, boxShadow: range === 'week' ? '0 2px 5px rgba(0,0,0,0.05)' : 'none' }}>주간</button>
+          <button className="btn-friendly" onClick={() => setRange('month')} style={{ padding: '8px 14px', borderRadius: 8, border: 'none', background: range === 'month' ? 'var(--surface)' : 'transparent', fontSize: 13, fontWeight: 700, boxShadow: range === 'month' ? '0 2px 5px rgba(0,0,0,0.05)' : 'none' }}>월간</button>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 12, marginBottom: 28 }}>
+        <div className="card" style={{ flex: 1, padding: 16 }}>
+          <div style={{ fontSize: 13, color: 'var(--sub)', fontWeight: 600, marginBottom: 4 }}>총 학습시간</div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--primary)' }}>{fmtHM(totalMin)}</div>
+        </div>
+        <div className="card" style={{ flex: 1, padding: 16 }}>
+          <div style={{ fontSize: 13, color: 'var(--sub)', fontWeight: 600, marginBottom: 4 }}>일 평균</div>
+          <div style={{ fontSize: 20, fontWeight: 800 }}>{fmtHM(avg)}</div>
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 32 }}>
+        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 12 }}>🔥 최근 5주 활동량 (잔디)</div>
+        <div className="card" style={{ display: 'grid', gridTemplateRows: 'repeat(7, 1fr)', gridAutoFlow: 'column', gap: 4, padding: 16 }}>
+          {grassDays.map((dk, i) => (
+            <div key={i} style={{ width: '100%', aspectRatio: '1', borderRadius: 4, backgroundColor: getActivityColor(dk) }} title={dk} />
+          ))}
+        </div>
+      </div>
+
+      <div className="card" style={{ marginBottom: 32, padding: 20, border: '1px solid var(--primary-light)', background: 'var(--surface)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <div style={{ fontSize: 15, fontWeight: 700 }} className="ai-text-shimmer">✨ AI 주간 회고 리포트</div>
+          <button className="btn-friendly" onClick={handleAiRetrospective} disabled={isAiLoading} style={{ padding: '8px 14px', borderRadius: 16, border: 'none', background: 'var(--primary-light)', color: 'var(--primary)', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+            {isAiLoading ? '생성 중...' : '리포트 받기'}
+          </button>
+        </div>
+        <div style={{ fontSize: 14, color: 'var(--text)', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+          {aiReport || <span style={{ color: 'var(--sub)', fontWeight: 500 }}>이번 주 학습 데이터를 바탕으로 AI가 피드백을 작성해 드립니다.</span>}
+        </div>
+      </div>
+      
+      <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 16 }}>태그(과목)별 비중</div>
+      <div className="card" style={{ padding: '16px 20px' }}>
+        {sortedTags.length === 0 && <div style={{ fontSize: 13, color: 'var(--sub)', textAlign: 'center' }}>데이터가 없습니다.</div>}
+        {sortedTags.map(([tag, min], i) => (
+          <div key={tag} style={{ display: 'flex', alignItems: 'center', padding: '12px 0', borderBottom: i !== sortedTags.length -1 ? '1px solid var(--hairline)' : 'none' }}>
+            <div style={{ width: 80, fontSize: 14, color: 'var(--text)', fontWeight: 600 }}>{tag}</div>
+            <div style={{ flex: 1, background: 'var(--hairline)', height: 8, borderRadius: 4, overflow: 'hidden', marginRight: 12 }}>
+              <div style={{ width: `${(min/totalMin)*100}%`, height: '100%', background: 'var(--primary)' }} />
+            </div>
+            <div style={{ width: 60, textAlign: 'right', fontSize: 13, color: 'var(--sub)', fontWeight: 600 }}>{fmtHM(min)}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SettingsScreen({ todos, blocks, sessions, dark, setDark, addManyBlocks }) {
+  const [msg, setMsg] = useState('');
+  const [isSyncing, setIsSyncing] = useState(false);
+  const todayKey = toKey(new Date());
+  
+  const exportToObsidian = () => {
+    const done = todos.filter(t => t.date === todayKey && t.done);
+    const dayBlocks = blocks.filter(b => b.date === todayKey).sort((a,b)=>a.start-b.start);
+    const daySessions = sessions.filter(s => s.date === todayKey);
+    
+    let md = `## 📅 ${todayKey} 데일리 리포트\n\n### ✅ 완료한 할 일\n`;
+    done.forEach(t => md += `- [x] ${t.title}\n`);
+    if(!done.length) md += `- 완료한 할 일이 없습니다.\n`;
+    
+    md += `\n### ⏱️ 타임블록 스케줄\n`;
+    dayBlocks.forEach(b => { md += `- ${pad(Math.floor(b.start/60))}:${pad(b.start%60)} ~ ${pad(Math.floor(b.end/60))}:${pad(b.end%60)} | ${b.title} ${b.tag ? '`#'+b.tag+'`' : ''}\n`; });
+    if(!dayBlocks.length) md += `- 등록된 타임블록이 없습니다.\n`;
+    
+    md += `\n### 🍅 포모도로 세션\n- 총 ${daySessions.length} 세션 완료\n`;
+    
+    try { navigator.clipboard.writeText(md).then(() => showMsg('✅ 마크다운이 클립보드에 복사되었습니다.'));
+    } catch(e) { showMsg('❌ 클립보드 복사에 실패했습니다.'); }
+  };
+
+  const requestNoti = () => {
+    if (typeof Notification !== 'undefined') {
+      Notification.requestPermission().then(p => {
+        if (p === 'granted') showMsg('🔔 푸시 알림이 허용되었습니다.');
+        else showMsg('🔕 알림이 차단되었습니다. 브라우저 설정에서 허용해주세요.');
+      });
+    }
+  };
+
+  // 구글 캘린더 가져오기 시뮬레이션
+  const simulateGoogleCalendarImport = () => {
+    setIsSyncing(true);
+    setTimeout(() => {
+      addManyBlocks([
+        { id: `gcal_${Date.now()}_1`, date: todayKey, title: '🗓️ [GCal] 주간 기획 회의', start: 600, end: 660, color: '#4285F4', tag: '회의' },
+        { id: `gcal_${Date.now()}_2`, date: todayKey, title: '🍽️ [GCal] 점심 약속', start: 720, end: 780, color: '#4285F4', tag: '개인' }
+      ]);
+      setIsSyncing(false);
+      showMsg('✅ 구글 캘린더에서 오늘의 일정을 성공적으로 불러왔습니다! (시뮬레이션)');
+    }, 1500);
+  };
+
+  const showMsg = (text) => { setMsg(text); setTimeout(() => setMsg(''), 3500); };
+
+  const btnStyle = { width: '100%', padding: '16px', borderRadius: 16, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 15, fontWeight: 700, cursor: 'pointer', marginBottom: 12, boxShadow: 'var(--shadow)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 };
+
+  return (
+    <div style={{ padding: '24px 20px', height: '100%', overflowY: 'auto' }}>
+      <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 28 }}>설정</div>
+      
+      <div className="card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', marginBottom: 32 }}>
+        <span style={{ fontSize: 16, fontWeight: 700 }}>🌙 다크 모드</span>
+        <button className="btn-friendly" onClick={() => setDark(!dark)} style={{ width: 52, height: 32, borderRadius: 16, border: 'none', background: dark ? '#34c759' : 'var(--hairline)', position: 'relative' }}>
+          <span style={{ position: 'absolute', top: 3, left: dark ? 23 : 3, width: 26, height: 26, borderRadius: 13, background: '#fff', transition: 'left 0.25s cubic-bezier(0.16, 1, 0.3, 1)', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }} />
+        </button>
+      </div>
+
+      <div style={{ fontSize: 14, color: 'var(--sub)', marginBottom: 12, fontWeight: 600, marginLeft: 4 }}>알림 및 연동</div>
+      
+      {/* 구글 캘린더 연동 섹션 */}
+      <div className="card" style={{ padding: 20, marginBottom: 20, background: 'var(--primary-light)', border: 'none' }}>
+        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8, color: 'var(--primary)' }}>📅 구글 캘린더 연동</div>
+        <div style={{ fontSize: 13, color: 'var(--text)', marginBottom: 16, lineHeight: 1.5, opacity: 0.8 }}>
+          현재 프리뷰 환경에서는 실제 구글 로그인이 불가능합니다. 아래 버튼을 눌러 연동 시 캘린더 블록이 어떻게 추가되는지 테스트해보세요.
+        </div>
+        <button className="btn-friendly" onClick={simulateGoogleCalendarImport} disabled={isSyncing} style={{ width: '100%', padding: '14px', borderRadius: 12, border: 'none', background: '#4285F4', color: '#fff', fontSize: 15, fontWeight: 700 }}>
+          {isSyncing ? '🔄 구글 캘린더 동기화 중...' : '구글 캘린더에서 오늘의 일정 가져오기'}
+        </button>
+      </div>
+
+      <button className="btn-friendly" onClick={requestNoti} style={btnStyle}>🔔 브라우저 푸시 알림 허용 (타이머용)</button>
+      <button className="btn-friendly" onClick={exportToObsidian} style={btnStyle}>📓 옵시디언 데일리 노트 복사</button>
+      
+      {msg && <div style={{ position: 'fixed', bottom: 90, left: '50%', transform: 'translateX(-50%)', background: 'var(--bar-bg)', color: '#fff', padding: '12px 20px', borderRadius: 24, fontSize: 14, fontWeight: 600, zIndex: 50, whiteSpace: 'nowrap', animation: 'popIn 0.3s' }}>{msg}</div>}
+    </div>
+  );
+}
+
+function useDarkMode() {
+  const [dark, setDark] = useState(false);
+  useEffect(() => { const local = localStorage.getItem('calendar_todo_app_dark_v1'); if (local === '1') setDark(true); }, []);
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+    localStorage.setItem('calendar_todo_app_dark_v1', dark ? '1' : '0');
+  }, [dark]);
+  return [dark, setDark];
+}
+
+/* --------------------------------------------------------
+   App Root Initialization
+-------------------------------------------------------- */
+function App() {
+  const { exp, level, progress, addExp } = useExp();
+  const { todos, add: addTodo, toggle: toggleTodo, remove: removeTodo, addSpacedRepetition } = useTodos(addExp);
+  const { habits, add: addHabit, remove: removeHabit, toggle: toggleHabit } = useHabits(addExp);
+  const { blocks, add: addBlock, update: updateBlock, remove: removeBlock, addMany: addManyBlocks } = useBlocks();
+  const { exams, setExams } = useExamDates();
+  const { sessions, addSession } = usePomodoroHistory(addExp);
+  
+  const [tab, setTab] = useState('home');
+  const [dark, setDark] = useDarkMode();
+  const [pomodoroPreset, setPomodoroPreset] = useState(null);
+
+  const navBtn = (id, icon, label) => (
+    <button onClick={() => setTab(id)} style={{ flex: 1, padding: '12px 0', border: 'none', background: 'none', color: tab === id ? 'var(--primary)' : 'var(--sub)', fontSize: 12, fontWeight: tab === id ? 700 : 500, cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, transition: 'color 0.2s' }}>
+      <div style={{ fontSize: 22, transition: 'transform 0.2s', transform: tab === id ? 'scale(1.1)' : 'scale(1)' }}>{icon}</div> {label}
+    </button>
+  );
+
+  return (
+    <div style={{ width: '100%', maxWidth: 430, margin: '0 auto', height: '100dvh', display: 'flex', flexDirection: 'column', background: 'var(--page-bg)', color: 'var(--text)', boxShadow: '0 0 20px rgba(0,0,0,0.05)' }}>
+      <ExamDdayBar exams={exams} setExams={setExams} />
+      {tab === 'home' && <LevelHeader level={level} progress={progress} />}
+      
+      <div style={{ flex: 1, overflow: 'hidden' }}>
+        {tab === 'home' && <HomeScreen todos={todos} blocks={blocks} sessions={sessions} habits={habits} toggleHabit={toggleHabit} addHabit={addHabit} exams={exams} toggleTodo={toggleTodo} onNavigate={setTab} onStartPomodoro={(p) => { setPomodoroPreset(p); setTab('pomodoro'); }} addSpacedRepetition={addSpacedRepetition} />}
+        {tab === 'calendar' && <CalendarScreen todos={todos} add={addTodo} toggle={toggleTodo} remove={removeTodo} addSpacedRepetition={addSpacedRepetition} />}
+        {tab === 'timebox' && <TimeboxScreen todos={todos} blocks={blocks} add={addBlock} addMany={addManyBlocks} update={updateBlock} remove={removeBlock} onStartPomodoro={(p) => { setPomodoroPreset(p); setTab('pomodoro'); }} />}
+        {tab === 'pomodoro' && <PomodoroScreen preset={pomodoroPreset} onSessionComplete={(min, tag, desc) => addSession(toKey(new Date()), min, tag, desc)} todaySessions={sessions.filter(s => s.date === toKey(new Date()))} />}
+        {tab === 'stats' && <StatsScreen blocks={blocks} sessions={sessions} todos={todos} />}
+        {tab === 'settings' && <SettingsScreen todos={todos} blocks={blocks} sessions={sessions} dark={dark} setDark={setDark} addManyBlocks={addManyBlocks} />}
+      </div>
+
+      <div style={{ display: 'flex', background: 'var(--surface)', borderTop: '1px solid var(--border)', paddingBottom: 'env(safe-area-inset-bottom)' }}>
+        {navBtn('home', '🏠', '홈')}
+        {navBtn('calendar', '📅', '할일')}
+        {navBtn('timebox', '🗓️', '일정')}
+        {navBtn('pomodoro', '⏱️', '타이머')}
+        {navBtn('stats', '📊', '통계')}
+        {navBtn('settings', '⚙️', '설정')}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
